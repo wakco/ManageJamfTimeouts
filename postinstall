@@ -1,0 +1,7 @@
+#!/bin/zsh -f
+## postinstall
+
+/bin/launchctl bootstrap system /Library/LaunchDaemons/nz.ac.waikato.managejamftimeout.plist
+
+exit 0		## Success
+
