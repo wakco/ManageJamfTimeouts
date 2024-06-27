@@ -1,0 +1,128 @@
+#!/bin/zsh
+
+caffeinate -dimsuw $$ &
+CAFF=$!
+
+LOGFILE="/Library/Logs/nz.ac.waikato.managejamftimeout.log"
+logIt() {
+ echo "$( date ) $1" >> "$LOGFILE"
+}
+
+loopPIDfile="/tmp/loginwindowloopPID"
+CPU_ARCH="$( arch )"
+LOGIN_PLIST="/Library/Preferences/com.apple.loginwindow.plist"
+
+loginwindowloop() {
+ LOGINWINDOWTEXT="Not Valid"
+ while [ ! "$( pgrep -lu "root" "loginwindow" )" = "" ]; do
+  sleep 1
+  LOGINWINDOWTEXTNEW="$(defaults read "$LOGIN_PLIST" LoginwindowText)"
+  if [ "$LOGINWINDOWTEXT" != "$LOGINWINDOWTEXTNEW" ]; then
+   pkill loginwindow
+   LOGINWINDOWTEXT="$LOGINWINDOWTEXTNEW"
+  fi
+  sleep $( if [ "$CPU_ARCH" = "arm64" ]; then echo "20" ; else echo "40" ; fi )
+ done
+}
+
+updateUser() {
+ theText="$1\n${2:-"$JAMF_URL"}"
+ defaults write "$LOGIN_PLIST" LoginwindowText "$theText"
+}
+
+VERSION="1.1"
+ENROL_START=0
+WATCHING=true
+SCRIPT_START=$( date "+%s" )
+RESTARTED=""
+POST_ENROL="jamf postMdmEnrollment"
+C_JAMF="/usr/local/bin/jamf"
+D_JAMF="/Library/LaunchDaemons/com.jamf.management.enroll.plist"
+DB_JAMF="/private/var/root/com.jamf.management.enroll.plist"
+if [ -e "$LOGFILE" ]; then
+ logIt "--- Manage Jamf Timeout v $VERSION Started after a restart(?) ---"
+ if JAMF_URL="Enrolling in: $( defaults read /Library/Preferences/com.jamfsoftware.jamf.plist jss_url 2>/dev/null )"; then
+  logIt "--- Enrollment is either still in progress or finished, So why did we start up?"
+  WATCHING=false
+ else
+  if [ "$( ps -axj | grep postMdmEnrollment | grep -v grep )" != "" ]; then
+   logIt "-- Enrollment in progress..."
+   updateUser "Apple Automated Enrollment Started." "Checking Jamf Pro Deployment Status..."
+  elif [ -e "$C_JAMF" ]; then
+   if [ -e "$DB_JAMF" ]; then
+    logIt "-- Backup plist found, restoring it"
+    ditto "$DB_JAMF" "$D_JAMF"
+   fi
+   if [ -e "$D_JAMF" ]; then
+    logIt "-- launch plist found, start it"
+    launchctl bootstrap system "$D_JAMF" >> "$LOGFILE"
+    updateUser "Apple Automated Enrollment Started." "Checking Jamf Pro Deployment Status..."
+   else
+    logIt "--- No ability to restart enrollment found, exiting..."
+    WATCHING=false
+   fi
+  else
+   logIt "--- Jamf command not found leaving no ability to restart enrollment, exiting..."
+   WATCHING=false
+  fi
+ fi
+else
+ logIt "--- Starting Manage Jamf Timeout v $VERSION ---"
+ updateUser "Apple Automated Enrollment Started." "Checking Jamf Pro Deployment Status..."
+fi
+while $WATCHING; do
+ if ! JAMF_URL="Enrolling in: $( defaults read /Library/Preferences/com.jamfsoftware.jamf.plist jss_url 2>/dev/null )"; then
+  JAMF_URL="Enrolling... (waiting for URL)"
+ fi
+ if [ ! "$( pgrep -lu "root" "loginwindow" )" = "" ] && [ ! -e "$loopPIDfile" ]; then
+  loginwindowloop &
+  echo "$!" > "$loopPIDfile"
+  logIt "- loginwindow restart loop started on PID $( cat "$loopPIDfile" )."
+ fi
+ logIt "- Waiting 5 seconds before checking"
+ sleep 5
+ CURDATE=$( date "+%s" )
+ if [ "$( ps -axj | grep postMdmEnrollment | grep -v grep )" != "" ]; then
+  if [ $ENROL_START = 0 ]; then
+   ENROL_START=$CURDATE
+   logIt "-- $POST_ENROL ${RESTARTED}started"
+   updateUser "Jamf Pro Deployment ${RESTARTED}Started."
+   ditto "$D_JAMF" "$DB_JAMF"
+   logIt "- com.jamf.management.enroll.plist backed up"
+  elif [ $CURDATE -gt $(($ENROL_START+600)) ]; then
+   logIt "--- $POST_ENROL is still running after 10 minutes, attempting to restart $POST_ENROL ..."
+   updateUser "Jamf Pro Deployment Delayed, Restarting Jamf deployment process."
+   if "$C_JAMF" checkJSSConnection >> "$LOGFILE"; then
+    launchctl kickstart -k "$D_JAMF" >> "$LOGFILE"
+    ENROL_START=0
+    RESTARTED="Re-"
+    logIt "-- $POST_ENROL restarted."
+   fi
+  elif [ $CURDATE -gt $(($ENROL_START+300)) ]; then
+   updateUser "Jamf Pro Deployment delayed(?), running for $((($CURDATE-$ENROL_START)\60)) minutes, restarting in $((($ENROL_START+600-$CURDATE)\60)) minutes."
+   logIt "- $POST_ENROL is still running after more than 5 minutes, considering restarting $POST_ENROL?\nIt has taken $(($CURDATE-$ENROL_START)) seconds so far."
+  elif [ $CURDATE -gt $(($ENROL_START+60)) ]; then
+   updateUser "Jamf Pro Deployment is still running after $((($CURDATE-$ENROL_START)\60)) minutes."
+   logIt "- $POST_ENROL is still running after more than a minute, is something slowing down the first jamf recon?\nIt has taken $(($CURDATE-$ENROL_START)) seconds so far."
+  fi
+ elif [ $ENROL_START -gt 0 ]; then
+  logIt "-- $POST_ENROL has finished after roughly $(($( date "+%s" )-$ENROL_START)) seconds."
+  WATCHING=false
+ fi
+ if [ $CURDATE -gt $(($SCRIPT_START+3600)) ]; then
+  logIt "--- This script has been running for over an an hour ($((($CURDATE-$SCRIPT_START)\60)) minutes), should we restart the computer?!?"
+ fi
+done
+updateUser "Jamf Pro Enrollment has successfully started."
+caffeinate -dimsut 300 &
+sleep 40
+if [ -e "$loopPIDfile" ]; then
+ kill -9 "$( cat "$loopPIDfile" )"
+ logIt "- loginwindow restart loop running on PID $( cat "$loopPIDfile" ) stopped."
+ rm -f "$loopPIDfile"
+fi
+logIt "--- Manage Jamf Timeout Finished ---"
+defaults delete "$LOGIN_PLIST" LoginwindowText
+rm -f /Library/LaunchDaemons/nz.ac.waikato.managejamftimeout.plist "$DB_JAMF"
+rm -f /usr/local/bin/managejamftimeout
+
