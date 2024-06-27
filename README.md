@@ -3,7 +3,7 @@ A little signed package for ADE/DEP Jamf PreStage only deployment that attempts 
 
 The package contains the three file, where two are deployed, and the postinstall script is executed at the end of the deployment, to start the manajamftimeouts script with the LaunchDaemons plist file so the installer can finish while the monitoring gets started.
 
-- post install
+- postinstall
   - executes /bin/launchctl bootstrap system /Library/LaunchDaemons/nz.ac.waikato.managejamftimeout.plist
 - nz.ac.waikato.managejamftimeouts.plist
   - run at load configured launchd plist to start /usr/local/bin/managejamftimeout
