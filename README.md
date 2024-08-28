@@ -8,4 +8,4 @@ The package contains three files, where two are deployed, and the postinstall sc
 - nz.ac.waikato.managejamftimeouts.plist
   - run at load configured launchd plist to start /usr/local/bin/managejamftimeout
 - managejamftimeout
-  - zsh script that does all the work, it will monitor the jamf processes until it sees a jamf process for **postMdmEnrollment**, at which point it will end, delete itself, delete the plist, and remove the LoginWindowText it has been using to notify of its status (it will periodically reload the loginwindow process for this).
+  - zsh script that does all the work, it will monitor the jamf processes, restarting them if necessary (after about 10 minutes), until it sees a jamf process for **postMdmEnrollment**, at which point it will end, delete itself, delete the plist, and remove the LoginWindowText it has been using to notify of its status (it will periodically reload the loginwindow process for this).
